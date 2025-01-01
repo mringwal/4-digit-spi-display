@@ -98,6 +98,15 @@ class Thing(wiring.Component):
                     # cache counter
                     for i in range(4):
                         m.d.sync += self.counter[i].eq(bcd_counter.counter[i])
+                    m.next = "SendUpdate"
+            with m.State("SendUpdate"):
+                with m.If(~self.o_stream.valid):
+                    m.d.sync += [
+                        self.o_stream.valid.eq(1),
+                        self.o_stream.payload.eq(font.i_stream.payload.row + 1)
+                    ]
+                with m.Elif(self.o_stream.ready):
+                    m.d.sync += self.o_stream.valid.eq(0)
                     m.next = "GetRow"
             with m.State("GetRow"):
                 m.d.sync += [
@@ -126,7 +135,7 @@ class Thing(wiring.Component):
                     m.d.sync += self.o_stream.valid.eq(0)
                     m.next = "RowSent"
             with m.State("RowSent"):
-                m.next = "GetRow"
+                m.next = "SendUpdate"
                 with m.If(self.digit > 0):
                     m.d.sync += self.digit.eq(self.digit - 1)
                 with m.Else():
@@ -158,11 +167,16 @@ async def testbench(ctx):
 
     for _ in range(20):
         print("/" * 56)
-        for _ in range(8):
+        for i in range(8):
             for _ in range(4):
                 print("---", end="")
+                actual_reg   = await stream_get(ctx, dut.o_stream)
+                expected_reg = i + 1
+                if actual_reg != expected_reg:
+                    print(f"expected {expected_reg:02x}, actual {actual_reg:02x}")
+                    assert False
                 value = await stream_get(ctx, dut.o_stream)
-                for i in range(8):
+                for _ in range(8):
                     if (value & 0x01) > 0:
                         print("x", end="")
                     else:
