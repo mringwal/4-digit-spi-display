@@ -6,6 +6,25 @@ from amaranth.lib.wiring import In, Out
 from bcd_counter import BCD_Counter, bcd_counter
 from font import Font, font_request
 
+# constants
+NUM_MODULES = 4
+DISPLAY_HEIGHT = 8
+
+DECODE_MODE_REG = 0x09
+BRIGHTNESS_REG = 0x0A
+SCAN_LIMIT_REG = 0x0B
+SHUTDOWN_REG = 0x0C
+DISPLAY_TEST_REG = 0x0F
+
+init_display = [
+    [SHUTDOWN_REG, 0x0],
+    [DISPLAY_TEST_REG, 0x0],
+    [SCAN_LIMIT_REG, 0x7],
+    [DECODE_MODE_REG, 0x0],
+    [SHUTDOWN_REG, 0x1],
+    [BRIGHTNESS_REG, 0x2 & 0x0f],
+] 
+
 class Thing(wiring.Component):
 
     clock   = Signal(32)
@@ -13,6 +32,7 @@ class Thing(wiring.Component):
     refresh = Signal(1)
     digit   = Signal(2)
     counter = Array([Signal(4) for _ in range(4)])
+    step    = Signal(6)
 
     i_stream: In(stream.Signature (unsigned(8)))
     o_stream: Out(stream.Signature(unsigned(8)))
@@ -44,14 +64,35 @@ class Thing(wiring.Component):
 
         with m.FSM():
             with m.State("Init"):
-                # TODO reset everything
                 # TODO configure display
-                m.d.sync += self.refresh.eq(1)
-                m.next = "Tick"
+                m.d.sync += [
+                    self.refresh.eq(1),
+                    self.step.eq(0),
+                    self.digit.eq(NUM_MODULES - 1)
+                ]
+                m.next = "Configure"
+            with m.State("Configure"):
+                with m.If(~self.o_stream.valid):
+                    for i in range(len(init_display)):
+                        for j in range(NUM_MODULES):
+                            reg, value = init_display[i]
+                            this_step = (i*NUM_MODULES + j) * 2
+                            with m.If(self.step == this_step     ):
+                                m.d.sync += self.o_stream.payload.eq(reg)
+                            with m.If(self.step == this_step + 1):
+                                m.d.sync += self.o_stream.payload.eq(value)
+                    m.d.sync += self.o_stream.valid.eq(1)
+                with m.Elif(self.o_stream.ready):
+                    m.d.sync += self.o_stream.valid.eq(0)
+                    with m.If(self.step < ((2 * NUM_MODULES * len(init_display)) - 1)):
+                        m.d.sync += self.step.eq(self.step + 1)
+                    with m.Else():
+                        m.d.sync += self.step.eq(0)
+                        m.next = "Tick"
             with m.State("Tick"):
                 with m.If(self.refresh):
                     m.d.sync += [
-                        self.digit.eq(3),
+                        self.digit.eq(NUM_MODULES - 1),
                         font.i_stream.payload.row.eq(0),
                     ]
                     # cache counter
@@ -106,9 +147,16 @@ async def stream_get(ctx, stream):
 
 
 async def testbench(ctx):
-        
-    for _ in range(20):
 
+    # verify init sequence
+    for [expected_reg, expected_value] in init_display:
+        for _ in range(NUM_MODULES):
+            actual_reg = await stream_get(ctx, dut.o_stream)
+            actual_value = await stream_get(ctx, dut.o_stream)
+            assert actual_reg == expected_reg
+            assert actual_value == expected_value
+
+    for _ in range(20):
         print("/" * 56)
         for _ in range(8):
             for _ in range(4):
