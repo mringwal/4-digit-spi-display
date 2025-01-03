@@ -14,8 +14,6 @@ class BCD_Counter(wiring.Component):
     def elaborate(self, platform) -> Module:
         m = Module()
 
-        print(self.counter)
-
         with m.If(~self.en):
             for i in range(4):
                 self.counter[i].eq(0)
