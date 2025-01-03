@@ -38,12 +38,17 @@ class Thing(wiring.Component):
     spi_active = Signal(1)
 
     # i_stream: In(stream.Signature (unsigned(8)))
-    o_stream: Out(stream.Signature(unsigned(8)))
-    spi_ss:   Out(1)
+    # o_stream: Out(stream.Signature(unsigned(8)))
 
-    bitmap_payload = Signal(8)
+    spi_ss:      Out(1)
+
+    spi_valid      = Signal(1)
+    spi_ready      = Signal(1)
+    spi_payload    = Signal(8)
+
     bitmap_valid   = Signal(1)
     bitmap_ready   = Signal(1)
+    bitmap_payload = Signal(8)
 
     def elaborate(self, platform) -> Module:
         if platform is not None:
@@ -66,8 +71,13 @@ class Thing(wiring.Component):
         ]
 
         # connect to SPI Out
-        m.d.comb += self.spi_ss.eq(spi_out.spi_ss)
-        wiring.connect(m, display_producer = self.o_stream, display_consumer = spi_out.stream)
+        # wiring.connect(m, display_producer = self.o_stream, display_consumer = spi_out.stream)
+        m.d.comb += [
+            spi_out.stream.valid.eq(self.spi_valid),
+            spi_out.stream.payload.eq(self.spi_payload),
+            self.spi_ready.eq(spi_out.stream.ready),
+            self.spi_ss.eq(spi_out.spi_ss),
+        ]
 
         # counter
         with m.If(self.clock == half_freq):
@@ -92,25 +102,25 @@ class Thing(wiring.Component):
                 for i in range(len(init_display)):
                     reg, _ = init_display[i]
                     with m.If(self.step == i):
-                        m.d.sync += self.o_stream.payload.eq(reg)
-                m.d.sync += self.o_stream.valid.eq(1)
-                with m.If(self.o_stream.ready):
+                        m.d.sync += self.spi_payload.eq(reg)
+                m.d.sync += self.spi_valid.eq(1)
+                with m.If(self.spi_ready):
                     m.next = "Config_SendValue"
 
             with m.State("Config_SendValue"):
-                m.d.sync += self.o_stream.valid.eq(0)
+                m.d.sync += self.spi_valid.eq(0)
                 for i in range(len(init_display)):
                     _, value = init_display[i]
                     with m.If(self.step == i):
-                        m.d.sync += self.o_stream.payload.eq(value)
-                m.d.sync += self.o_stream.valid.eq(1)
-                with m.If(self.o_stream.ready):
+                        m.d.sync += self.spi_payload.eq(value)
+                m.d.sync += self.spi_valid.eq(1)
+                with m.If(self.spi_ready):
                     m.next = "Config_Next"
 
             with m.State("Config_Next"):
-                m.d.sync += self.o_stream.valid.eq(0)
+                m.d.sync += self.spi_valid.eq(0)
                 # wait for transmission complete
-                with m.If(self.o_stream.ready):
+                with m.If(self.spi_ready):
                     with m.If(self.digit > 0):
                         m.d.sync += self.digit.eq(self.digit - 1)
                         m.next = "Config_SendReg"
@@ -136,13 +146,13 @@ class Thing(wiring.Component):
 
             with m.State("SendUpdate"):
                 m.d.sync += spi_out.en.eq(1) 
-                with m.If(~self.o_stream.valid):
+                with m.If(~self.spi_valid):
                     m.d.sync += [
-                        self.o_stream.valid.eq(1),
-                        self.o_stream.payload.eq(font.i_stream.payload.row + 1)
+                        self.spi_valid.eq(1),
+                        self.spi_payload.eq(font.i_stream.payload.row + 1)
                     ]
-                with m.Elif(self.o_stream.ready):
-                    m.d.sync += self.o_stream.valid.eq(0)
+                with m.Elif(self.spi_ready):
+                    m.d.sync += self.spi_valid.eq(0)
                     m.next = "GetRow"
 
             with m.State("GetRow"):
@@ -165,13 +175,13 @@ class Thing(wiring.Component):
                     # no new request
                     m.d.sync += font.i_stream.valid.eq(0)
                     # cache bitmap
-                    m.d.sync += self.o_stream.valid.eq(1)
-                    m.d.sync += self.o_stream.payload.eq(self.bitmap_payload)
+                    m.d.sync += self.spi_valid.eq(1)
+                    m.d.sync += self.spi_payload.eq(self.bitmap_payload)
                     m.next = "SendRow"
 
             with m.State("SendRow"):
-                with m.If(self.o_stream.ready):
-                    m.d.sync += self.o_stream.valid.eq(0)
+                with m.If(self.spi_ready):
+                    m.d.sync += self.spi_valid.eq(0)
                     m.next = "RowSent"
                     
             with m.State("RowSent"):
@@ -196,8 +206,8 @@ async def stream_get(ctx, stream):
     return payload
 
 
-async def stream_peek(ctx, stream):
-    payload, = await ctx.tick().sample(stream.payload).until(stream.valid & stream.ready)
+async def stream_peek(ctx, stream_payload, stream_ready, stream_valid):
+    payload, = await ctx.tick().sample(stream_payload).until(stream_valid & stream_ready)
     return payload
 
 
@@ -206,10 +216,10 @@ async def testbench(ctx):
     # verify init sequence
     for [expected_reg, expected_value] in init_display:
         for _ in range(NUM_MODULES):
-            actual_reg   = await stream_peek(ctx, dut.o_stream)
-            actual_value = await stream_peek(ctx, dut.o_stream)
-            # print(f"expected {expected_reg:02x} = {expected_value:02x} //  actual {actual_reg:02x} = {actual_value:02x}")
-            assert actual_reg == expected_reg
+            actual_reg   = await stream_peek(ctx, dut.spi_payload, dut.spi_ready, dut.spi_valid)
+            actual_value = await stream_peek(ctx, dut.spi_payload, dut.spi_ready, dut.spi_valid)
+            print(f"expected {expected_reg:02x} = {expected_value:02x} //  actual {actual_reg:02x} = {actual_value:02x}")
+            assert actual_reg   == expected_reg
             assert actual_value == expected_value
 
     for _ in range(20):
@@ -217,12 +227,12 @@ async def testbench(ctx):
         for i in range(8):
             for _ in range(4):
                 print("---", end="")
-                actual_reg   = await stream_peek(ctx, dut.o_stream)
+                actual_reg   = await stream_peek(ctx, dut.spi_payload, dut.spi_ready, dut.spi_valid)
                 expected_reg = i + 1
                 if actual_reg != expected_reg:
                     print(f"expected {expected_reg:02x}, actual {actual_reg:02x}")
                     assert False
-                value = await stream_peek(ctx, dut.o_stream)
+                value = await stream_peek(ctx, dut.spi_payload, dut.spi_ready, dut.spi_valid)
                 for _ in range(8):
                     if (value & 0x01) > 0:
                         print("x", end="")
