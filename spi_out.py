@@ -24,12 +24,12 @@ class SPI_Out(wiring.Component):
             m.d.sync += self.spi_clk.eq(0)
             m.d.sync += self.spi_out.eq(0)
         with m.Elif(self.count == 0):
-            m.d.comb += self.stream.ready.eq(1)
+            m.d.sync += self.stream.ready.eq(1)
             with m.If(self.stream.valid):
                 m.d.sync += self.data.eq(self.stream.payload)
                 m.d.sync += self.count.eq(8)
         with m.Else():
-            m.d.comb += self.stream.ready.eq(0)
+            m.d.sync += self.stream.ready.eq(0)
             m.d.sync += self.spi_clk.eq(~self.spi_clk)
             with m.If(self.spi_clk):
                 m.d.sync += self.data.eq(self.data << 1)
