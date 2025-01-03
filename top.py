@@ -258,3 +258,7 @@ with sim.write_vcd("top.vcd"):
 
 with open("top.v", "w") as f:
     f.write(verilog.convert(dut))
+
+from amaranth_boards.tinyfpga_bx import TinyFPGABXPlatform
+TinyFPGABXPlatform().build(dut, do_program=False)
+
