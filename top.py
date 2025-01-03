@@ -37,9 +37,13 @@ class Thing(wiring.Component):
     step    = Signal(6)
     spi_active = Signal(1)
 
-    i_stream: In(stream.Signature (unsigned(8)))
+    # i_stream: In(stream.Signature (unsigned(8)))
     o_stream: Out(stream.Signature(unsigned(8)))
     spi_ss:   Out(1)
+
+    bitmap_payload = Signal(8)
+    bitmap_valid   = Signal(1)
+    bitmap_ready   = Signal(1)
 
     def elaborate(self, platform) -> Module:
         if platform is not None:
@@ -52,12 +56,18 @@ class Thing(wiring.Component):
         m.submodules.font        = font        = Font()
         m.submodules.spi_out     = spi_out     = SPI_Out()
 
+
         # connect to font module
-        wiring.connect(m, bitmap_producer = font.o_stream, bitmap_consumer = self.i_stream)
+        # wiring.connect(m, bitmap_producer = font.o_stream, bitmap_consumer = self.i_stream)
+        m.d.comb += [
+            self.bitmap_payload.eq(font.o_stream.payload),
+            self.bitmap_valid.eq(font.o_stream.valid),
+            font.o_stream.ready.eq(self.bitmap_ready),
+        ]
 
         # connect to SPI Out
         m.d.comb += self.spi_ss.eq(spi_out.spi_ss)
-        wiring.connect(m, display_produces = self.o_stream, display_consumer = spi_out.stream)
+        wiring.connect(m, display_producer = self.o_stream, display_consumer = spi_out.stream)
 
         # counter
         with m.If(self.clock == half_freq):
@@ -141,7 +151,7 @@ class Thing(wiring.Component):
                     font.i_stream.payload.character.eq(self.counter[self.digit] + 0x030),
                     font.i_stream.valid.eq(1),
                     # we are ready to receive bitmap
-                    self.i_stream.ready.eq(1),
+                    self.bitmap_ready.eq(1),
                     # row active
                     spi_out.en.eq(1) 
                 ]
@@ -149,14 +159,14 @@ class Thing(wiring.Component):
 
             with m.State("WaitForRow"):
                 # when font modules provides bitmpap data
-                with m.If(self.i_stream.valid):
+                with m.If(self.bitmap_valid):
                     # busy
-                    m.d.sync += self.i_stream.ready.eq(0)
+                    m.d.sync += self.bitmap_ready.eq(0)
                     # no new request
                     m.d.sync += font.i_stream.valid.eq(0)
                     # cache bitmap
                     m.d.sync += self.o_stream.valid.eq(1)
-                    m.d.sync += self.o_stream.payload.eq(self.i_stream.payload)
+                    m.d.sync += self.o_stream.payload.eq(self.bitmap_payload)
                     m.next = "SendRow"
 
             with m.State("SendRow"):
@@ -235,3 +245,6 @@ sim.add_testbench(testbench)
 
 with sim.write_vcd("top.vcd"):
     sim.run()
+
+with open("top.v", "w") as f:
+    f.write(verilog.convert(dut))
