@@ -11,10 +11,13 @@ class SPI_Out(wiring.Component):
     spi_ss:  Out(1)
     stream:  In(stream.Signature(8))
 
-    def __init__(self):
+    prescale_counter = Signal(8)
+
+    def __init__(self, prescaler = 1):
         super().__init__()
         self.count = Signal(range(9))
         self.data = Signal(8)
+        self.prescaler = prescaler
 
     def elaborate(self, platform) -> Module:
         m = Module()
@@ -23,6 +26,7 @@ class SPI_Out(wiring.Component):
             m.d.sync += self.count.eq(0)
             m.d.sync += self.spi_clk.eq(0)
             m.d.sync += self.spi_out.eq(0)
+            m.d.sync += self.prescale_counter.eq(self.prescaler)
         with m.Elif(self.count == 0):
             m.d.sync += self.stream.ready.eq(1)
             with m.If(self.stream.valid):
@@ -30,12 +34,16 @@ class SPI_Out(wiring.Component):
                 m.d.sync += self.count.eq(8)
         with m.Else():
             m.d.sync += self.stream.ready.eq(0)
-            m.d.sync += self.spi_clk.eq(~self.spi_clk)
-            with m.If(self.spi_clk):
-                m.d.sync += self.data.eq(self.data << 1)
-                m.d.sync += self.spi_out.eq(self.data[-1])
+            with m.If(self.prescale_counter > 0):
+                m.d.sync += self.prescale_counter.eq(self.prescale_counter - 1)
             with m.Else():
-                m.d.sync += self.count.eq(self.count - 1)
+                m.d.sync += self.prescale_counter.eq(self.prescaler)
+                m.d.sync += self.spi_clk.eq(~self.spi_clk)
+                with m.If(self.spi_clk):
+                    m.d.sync += self.data.eq(self.data << 1)
+                    m.d.sync += self.spi_out.eq(self.data[-1])
+                with m.Else():
+                    m.d.sync += self.count.eq(self.count - 1)
         return m
 
 

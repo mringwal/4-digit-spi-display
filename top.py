@@ -59,8 +59,7 @@ class Thing(wiring.Component):
         m = Module()
         m.submodules.bcd_counter = bcd_counter = BCD_Counter()
         m.submodules.font        = font        = Font()
-        m.submodules.spi_out     = spi_out     = SPI_Out()
-
+        m.submodules.spi_out     = spi_out     = SPI_Out(16)
 
         # connect to font module
         # wiring.connect(m, bitmap_producer = font.o_stream, bitmap_consumer = self.i_stream)
