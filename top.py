@@ -27,7 +27,7 @@ init_display = [
     [BRIGHTNESS_REG, 0x2 & 0x0f],
 ] 
 
-class Thing(wiring.Component):
+class Thing(Elaboratable):
 
     clock   = Signal(32)
 
@@ -40,8 +40,6 @@ class Thing(wiring.Component):
     # i_stream: In(stream.Signature (unsigned(8)))
     # o_stream: Out(stream.Signature(unsigned(8)))
 
-    spi_ss:      Out(1)
-
     spi_valid      = Signal(1)
     spi_ready      = Signal(1)
     spi_payload    = Signal(8)
@@ -50,11 +48,20 @@ class Thing(wiring.Component):
     bitmap_ready   = Signal(1)
     bitmap_payload = Signal(8)
 
+
     def elaborate(self, platform) -> Module:
         if platform is not None:
             half_freq = int(platform.default_clk_frequency // 2)
+            spi_ss   = platform.request("spi_ss").o
+            spi_clk  = platform.request("spi_clk").o
+            spi_data = platform.request("spi_data").o
+            led      = platform.request("led").o
         else:
             half_freq = 1000
+            spi_ss    = Signal(1)
+            spi_clk   = Signal(1)
+            spi_data  = Signal(1)
+            led       = Signal(1)
 
         m = Module()
         m.submodules.bcd_counter = bcd_counter = BCD_Counter()
@@ -75,14 +82,18 @@ class Thing(wiring.Component):
             spi_out.stream.valid.eq(self.spi_valid),
             spi_out.stream.payload.eq(self.spi_payload),
             self.spi_ready.eq(spi_out.stream.ready),
-            self.spi_ss.eq(spi_out.spi_ss),
+            spi_ss.eq(spi_out.spi_ss),
+            spi_data.eq(spi_out.spi_out),
+            spi_clk.eq(spi_out.spi_clk)
         ]
+
 
         # counter
         with m.If(self.clock == half_freq):
             m.d.sync += bcd_counter.en.eq(1)
             m.d.sync += self.clock.eq(0)
             m.d.sync += self.refresh.eq(1)
+            m.d.sync += led.eq(~led)
         with m.Else():
             m.d.sync += bcd_counter.en.eq(0)
             m.d.sync += self.clock.eq(self.clock + 1)
@@ -221,7 +232,7 @@ async def testbench(ctx):
             assert actual_reg   == expected_reg
             assert actual_value == expected_value
 
-    for _ in range(20):
+    for _ in range(10):
         print("/" * 56)
         for i in range(8):
             for _ in range(4):
@@ -255,9 +266,17 @@ sim.add_testbench(testbench)
 with sim.write_vcd("top.vcd"):
     sim.run()
 
-with open("top.v", "w") as f:
-    f.write(verilog.convert(dut))
+# with open("top.v", "w") as f:
+#     f.write(verilog.convert(dut))
 
 from amaranth_boards.tinyfpga_bx import TinyFPGABXPlatform
-TinyFPGABXPlatform().build(dut, do_program=False)
+from amaranth.build import Resource, Pins, Attrs
 
+platform = TinyFPGABXPlatform()
+# Add your custom pin resource if needed
+platform.add_resources([
+    Resource("spi_ss",   0, Pins("A2", dir="o"), Attrs(IO_STANDARD="SB_LVCMOS")),
+    Resource("spi_clk",  0, Pins("A1", dir="o"), Attrs(IO_STANDARD="SB_LVCMOS")),
+    Resource("spi_data", 0, Pins("B1", dir="o"), Attrs(IO_STANDARD="SB_LVCMOS"))
+])
+platform.build(dut, do_program=False)
