@@ -62,7 +62,7 @@ class Thing(Elaboratable):
             spi_data = platform.request("spi_data").o
             led      = platform.request("led").o
         else:
-            half_freq = 1000
+            half_freq = 2000 * self.prescaler
             spi_ss    = Signal(1)
             spi_clk   = Signal(1)
             spi_data  = Signal(1)
@@ -173,6 +173,7 @@ class Thing(Elaboratable):
                     m.d.sync += [
                         self.digit.eq(NUM_MODULES - 1),
                         font.i_stream.payload.row.eq(0),
+                        self.refresh.eq(0),
                     ]
                     # cache counter
                     for i in range(4):
