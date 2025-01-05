@@ -48,6 +48,11 @@ class Thing(Elaboratable):
     bitmap_ready   = Signal(1)
     bitmap_payload = Signal(8)
 
+    def __init__(self, prescaler = 1):
+        super().__init__()
+        self.prescaler = prescaler
+        self.prescale_counter = Signal(range(prescaler+1))
+
 
     def elaborate(self, platform) -> Module:
         if platform is not None:
@@ -66,7 +71,7 @@ class Thing(Elaboratable):
         m = Module()
         m.submodules.bcd_counter = bcd_counter = BCD_Counter()
         m.submodules.font        = font        = Font()
-        m.submodules.spi_out     = spi_out     = SPI_Out(16)
+        m.submodules.spi_out     = spi_out     = SPI_Out(self.prescaler)
 
         # connect to font module
         # wiring.connect(m, bitmap_producer = font.o_stream, bitmap_consumer = self.i_stream)
@@ -82,9 +87,10 @@ class Thing(Elaboratable):
             spi_out.stream.valid.eq(self.spi_valid),
             spi_out.stream.payload.eq(self.spi_payload),
             self.spi_ready.eq(spi_out.stream.ready),
-            spi_ss.eq(spi_out.spi_ss),
             spi_data.eq(spi_out.spi_out),
-            spi_clk.eq(spi_out.spi_clk)
+            spi_clk.eq(spi_out.spi_clk),
+            # SS is active low
+            spi_ss.eq(~spi_out.spi_ss),
         ]
 
 
@@ -103,7 +109,8 @@ class Thing(Elaboratable):
                 m.d.sync += [
                     self.refresh.eq(1),
                     self.step.eq(0),
-                    self.digit.eq(NUM_MODULES - 1)
+                    self.digit.eq(NUM_MODULES - 1),
+                    self.prescale_counter.eq(self.prescaler),
                 ]
                 m.next = "Config_SendReg"
 
@@ -115,27 +122,45 @@ class Thing(Elaboratable):
                         m.d.sync += self.spi_payload.eq(reg)
                 m.d.sync += self.spi_valid.eq(1)
                 with m.If(self.spi_ready):
+                    m.next = "Config_W4SendRegActive"
+
+            with m.State("Config_W4SendRegActive"):
+                m.d.sync += self.spi_valid.eq(0)
+                with m.If(~self.spi_ready):
+                    m.next = "Config_W4SendRegComplete"
+
+            with m.State("Config_W4SendRegComplete"):
+                with m.If(self.spi_ready):
                     m.next = "Config_SendValue"
 
             with m.State("Config_SendValue"):
-                m.d.sync += self.spi_valid.eq(0)
                 for i in range(len(init_display)):
                     _, value = init_display[i]
                     with m.If(self.step == i):
                         m.d.sync += self.spi_payload.eq(value)
                 m.d.sync += self.spi_valid.eq(1)
                 with m.If(self.spi_ready):
+                    m.next = "Config_W4SendValueActive"
+
+            with m.State("Config_W4SendValueActive"):
+                m.d.sync += self.spi_valid.eq(0)
+                with m.If(~self.spi_ready):
+                    m.next = "Config_W4SendValueComplete"
+
+            with m.State("Config_W4SendValueComplete"):
+                with m.If(self.spi_ready):
                     m.next = "Config_Next"
 
             with m.State("Config_Next"):
-                m.d.sync += self.spi_valid.eq(0)
-                # wait for transmission complete
-                with m.If(self.spi_ready):
-                    with m.If(self.digit > 0):
-                        m.d.sync += self.digit.eq(self.digit - 1)
-                        m.next = "Config_SendReg"
+                with m.If(self.digit > 0):
+                    m.d.sync += self.digit.eq(self.digit - 1)
+                    m.next = "Config_SendReg"
+                with m.Else():
+                    m.d.sync += spi_out.en.eq(0) 
+                    with m.If(self.prescale_counter > 0):
+                        m.d.sync += self.prescale_counter.eq(self.prescale_counter - 1)
                     with m.Else():
-                        m.d.sync += spi_out.en.eq(0) 
+                        m.d.sync += self.prescale_counter.eq(self.prescaler)
                         m.d.sync += self.digit.eq(NUM_MODULES - 1)
                         with m.If(self.step < (len(init_display) - 1)):
                             m.d.sync += self.step.eq(self.step + 1)
@@ -195,16 +220,21 @@ class Thing(Elaboratable):
                     m.next = "RowSent"
                     
             with m.State("RowSent"):
-                m.next = "SendUpdate"
                 with m.If(self.digit > 0):
                     m.d.sync += self.digit.eq(self.digit - 1)
+                    m.next = "SendUpdate"
                 with m.Else():
                     m.d.sync += spi_out.en.eq(0) 
-                    m.d.sync += self.digit.eq(3)
-                    with m.If(font.i_stream.payload.row < 7):
-                        m.d.sync += font.i_stream.payload.row.eq(font.i_stream.payload.row + 1)
+                    with m.If(self.prescale_counter > 0):
+                        m.d.sync += self.prescale_counter.eq(self.prescale_counter - 1)
                     with m.Else():
-                        m.next = "Tick"
+                        m.d.sync += self.prescale_counter.eq(self.prescaler)
+                        m.d.sync += self.digit.eq(3)
+                        with m.If(font.i_stream.payload.row < 7):
+                            m.d.sync += font.i_stream.payload.row.eq(font.i_stream.payload.row + 1)
+                            m.next = "SendUpdate"
+                        with m.Else():
+                            m.next = "Tick"
 
         return m
 
@@ -257,7 +287,7 @@ async def testbench(ctx):
         # wait for next tick
         await ctx.tick().until(dut.refresh)
 
-dut = Thing()
+dut = Thing(16)
 
 sim = Simulator(dut)
 sim.add_clock(1e-6)
@@ -265,6 +295,8 @@ sim.add_testbench(testbench)
 
 with sim.write_vcd("top.vcd"):
     sim.run()
+
+exit
 
 # with open("top.v", "w") as f:
 #     f.write(verilog.convert(dut))
