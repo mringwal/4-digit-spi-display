@@ -181,14 +181,21 @@ class Thing(Elaboratable):
                     m.next = "SendUpdate"
 
             with m.State("SendUpdate"):
-                m.d.sync += spi_out.en.eq(1) 
-                with m.If(~self.spi_valid):
-                    m.d.sync += [
-                        self.spi_valid.eq(1),
-                        self.spi_payload.eq(font.i_stream.payload.row + 1)
-                    ]
-                with m.Elif(self.spi_ready):
-                    m.d.sync += self.spi_valid.eq(0)
+                m.d.sync += [
+                    spi_out.en.eq(1),
+                    self.spi_valid.eq(1),
+                    self.spi_payload.eq(font.i_stream.payload.row + 1)
+                ]
+                with m.If(self.spi_ready):
+                    m.next = "SendUpdateW4Active"
+
+            with m.State("SendUpdateW4Active"):
+                m.d.sync += self.spi_valid.eq(0)
+                with m.If(~self.spi_ready):
+                    m.next = "SendUpdateW4Complete"
+
+            with m.State("SendUpdateW4Complete"):
+                with m.If(self.spi_ready):
                     m.next = "GetRow"
 
             with m.State("GetRow"):
@@ -212,14 +219,18 @@ class Thing(Elaboratable):
                     m.d.sync += font.i_stream.valid.eq(0)
                     # cache bitmap
                     m.d.sync += self.spi_valid.eq(1)
-                    m.d.sync += self.spi_payload.eq(self.bitmap_payload)
-                    m.next = "SendRow"
+                    m.d.sync += self.spi_payload.eq(self.bitmap_payload[::-1])
+                    m.next = "SentRowW4Active"
 
-            with m.State("SendRow"):
-                with m.If(self.spi_ready):
+            with m.State("SentRowW4Active"):
                     m.d.sync += self.spi_valid.eq(0)
-                    m.next = "RowSent"
+                    with m.If(~self.spi_ready):
+                        m.next = "SendRowW4Complete"
                     
+            with m.State("SendRowW4Complete"):
+                with m.If(self.spi_ready):
+                    m.next = "RowSent"
+
             with m.State("RowSent"):
                 with m.If(self.digit > 0):
                     m.d.sync += self.digit.eq(self.digit - 1)
