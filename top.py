@@ -308,16 +308,12 @@ sim.add_testbench(testbench)
 with sim.write_vcd("top.vcd"):
     sim.run()
 
-exit
-
-# with open("top.v", "w") as f:
-#     f.write(verilog.convert(dut))
 
 from amaranth_boards.tinyfpga_bx import TinyFPGABXPlatform
 from amaranth.build import Resource, Pins, Attrs
 
+# Connect pins
 platform = TinyFPGABXPlatform()
-# Add your custom pin resource if needed
 platform.add_resources([
     Resource("spi_ss",   0, Pins("A2", dir="o"), Attrs(IO_STANDARD="SB_LVCMOS")),
     Resource("spi_clk",  0, Pins("A1", dir="o"), Attrs(IO_STANDARD="SB_LVCMOS")),
