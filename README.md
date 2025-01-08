@@ -17,3 +17,7 @@ A statemachine is used to:
 - init display
 - wait for next counter tick
 - update display by sending one row at a time. The conversion between character and bitmap is done on the fly
+
+## Setup
+
+![TinyFPGA-BX flashed directly with J-Link and 4-digit MAX7129 8x8 Display](setup.jpg)
